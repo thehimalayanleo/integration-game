@@ -2,6 +2,8 @@
 
 A minimal Streamlit app for running CGF-FGF experiments and generating compact review-ready reports with OpenAI or Claude.
 
+Live app: https://integration-game-uqrpptzh8mtmfj9nzhdmss.streamlit.app/
+
 ## Run locally
 
 ```bash
