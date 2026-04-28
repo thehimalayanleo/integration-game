@@ -352,10 +352,10 @@ with st.sidebar:
     secret_name = "OPENAI_API_KEY" if state["provider"] == "OpenAI" else "ANTHROPIC_API_KEY"
     secret_key = get_secret_key(secret_name)
     entered_key = st.text_input(
-        f"{state['provider']} API key",
+        "API key",
         type="password",
         value="",
-        help=f"Leave blank to use {secret_name} from Streamlit secrets. Typed keys are kept only in this Streamlit session.",
+        help=f"Used for the selected provider: {state['provider']}. Leave blank to use {secret_name} from Streamlit secrets. Typed keys are kept only in this Streamlit session.",
     )
     api_key = entered_key or secret_key
     st.session_state.experiment["model"] = st.text_input("Model", st.session_state.experiment["model"])
