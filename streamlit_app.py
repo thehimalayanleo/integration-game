@@ -66,6 +66,7 @@ def fresh_state() -> dict:
     stamp = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
     return {
         "id": f"exp-{stamp}",
+        "provider": "OpenAI",
         "model": "gpt-4.1",
         "test_case": "",
         "watch_list": "",
@@ -74,11 +75,11 @@ def fresh_state() -> dict:
     }
 
 
-def get_secret_key() -> str:
+def get_secret_key(name: str) -> str:
     try:
-        return st.secrets.get("OPENAI_API_KEY", "")
+        return st.secrets.get(name, "")
     except Exception:
-        return os.environ.get("OPENAI_API_KEY", "")
+        return os.environ.get(name, "")
 
 
 def call_openai(api_key: str, model: str, instructions: str, user_input: str) -> str:
@@ -113,6 +114,43 @@ def call_openai(api_key: str, model: str, instructions: str, user_input: str) ->
             if content.get("type") == "output_text" and content.get("text"):
                 parts.append(content["text"])
     return "\n".join(parts).strip() or "[No text output returned.]"
+
+
+def call_anthropic(api_key: str, model: str, instructions: str, user_input: str) -> str:
+    body = {
+        "model": model,
+        "system": instructions,
+        "max_tokens": 4096,
+        "messages": [{"role": "user", "content": user_input}],
+    }
+    request = urllib.request.Request(
+        "https://api.anthropic.com/v1/messages",
+        data=json.dumps(body).encode("utf-8"),
+        headers={
+            "Content-Type": "application/json",
+            "x-api-key": api_key,
+            "anthropic-version": "2023-06-01",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=120) as response:
+            data = json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8")
+        raise RuntimeError(detail) from exc
+
+    parts = []
+    for content in data.get("content", []):
+        if content.get("type") == "text" and content.get("text"):
+            parts.append(content["text"])
+    return "\n".join(parts).strip() or "[No text output returned.]"
+
+
+def call_model(provider: str, api_key: str, model: str, instructions: str, user_input: str) -> str:
+    if provider == "Claude":
+        return call_anthropic(api_key, model, instructions, user_input)
+    return call_openai(api_key, model, instructions, user_input)
 
 
 def cgf_round_prompt(state: dict, round_index: int) -> str:
@@ -156,7 +194,7 @@ CGF response:
 def transcript_text(state: dict) -> str:
     lines = [
         f"Experiment: {state['id']}",
-        f"Mode: OpenAI API ({state['model']})",
+        f"Mode: {state.get('provider', 'OpenAI')} API ({state['model']})",
         "",
         "Test case:",
         state["test_case"],
@@ -263,7 +301,7 @@ Test whether CGF can answer the test case while avoiding the FGF watch-listed fa
 Setup
 Experiment: {state['id']}
 Rounds completed: {completed}/3
-Model: {state['model']}
+Model: {state.get('provider', 'OpenAI')} / {state['model']}
 
 Test Case
 {state['test_case'][:900]}
@@ -303,21 +341,30 @@ st.caption("A simple Streamlit runner for CGF-FGF experiments and review-ready r
 
 with st.sidebar:
     st.header("Settings")
-    secret_key = get_secret_key()
+    state = st.session_state.experiment
+    state.setdefault("provider", "OpenAI")
+    provider = st.radio("Provider", ["OpenAI", "Claude"], index=0 if state["provider"] == "OpenAI" else 1)
+    if provider != state["provider"]:
+        state["provider"] = provider
+        state["model"] = "gpt-4.1" if provider == "OpenAI" else "claude-sonnet-4-20250514"
+        st.rerun()
+
+    secret_name = "OPENAI_API_KEY" if state["provider"] == "OpenAI" else "ANTHROPIC_API_KEY"
+    secret_key = get_secret_key(secret_name)
     entered_key = st.text_input(
-        "OpenAI API key",
+        f"{state['provider']} API key",
         type="password",
         value="",
-        help="Leave blank to use OPENAI_API_KEY from Streamlit secrets. Typed keys are kept only in this Streamlit session.",
+        help=f"Leave blank to use {secret_name} from Streamlit secrets. Typed keys are kept only in this Streamlit session.",
     )
     api_key = entered_key or secret_key
     st.session_state.experiment["model"] = st.text_input("Model", st.session_state.experiment["model"])
     if secret_key and not entered_key:
-        st.success("Using OPENAI_API_KEY from secrets.")
+        st.success(f"Using {secret_name} from secrets.")
     elif entered_key:
         st.info("Using temporary key from this session.")
     else:
-        st.warning("Add an API key or configure Streamlit secrets.")
+        st.warning(f"Add a {state['provider']} key or configure {secret_name}.")
 
     uploaded = st.file_uploader("Import transcript JSON", type=["json"])
     if uploaded:
@@ -346,7 +393,7 @@ for idx in range(3):
             st.markdown("**CGF**")
             if st.button(f"Run CGF round {idx + 1}", key=f"run_cgf_{idx}", disabled=not api_key):
                 with st.spinner("Running CGF..."):
-                    cgf_text = call_openai(api_key, state["model"], CGF_PROMPT, cgf_round_prompt(state, idx))
+                    cgf_text = call_model(state["provider"], api_key, state["model"], CGF_PROMPT, cgf_round_prompt(state, idx))
                     state["rounds"][idx]["cgf"] = cgf_text
                     st.session_state[cgf_key] = cgf_text
                     st.rerun()
@@ -360,7 +407,7 @@ for idx in range(3):
             st.markdown("**FGF**")
             if st.button(f"Run FGF round {idx + 1}", key=f"run_fgf_{idx}", disabled=not api_key or not state["rounds"][idx]["cgf"]):
                 with st.spinner("Running FGF..."):
-                    fgf_text = call_openai(api_key, state["model"], FGF_PROMPT, fgf_round_prompt(state, idx))
+                    fgf_text = call_model(state["provider"], api_key, state["model"], FGF_PROMPT, fgf_round_prompt(state, idx))
                     state["rounds"][idx]["fgf"] = fgf_text
                     st.session_state[fgf_key] = fgf_text
                     st.rerun()
@@ -377,7 +424,8 @@ with report_col:
     if st.button("Generate review-ready report", type="primary", disabled=not any(item["cgf"] for item in state["rounds"])):
         if api_key:
             with st.spinner("Generating report..."):
-                report_text = call_openai(
+                report_text = call_model(
+                    state["provider"],
                     api_key,
                     state["model"],
                     "You are a concise experiment analyst. Produce review-ready CGF-FGF evaluation reports from transcripts.",
