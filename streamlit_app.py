@@ -289,6 +289,11 @@ def export_payload(state: dict) -> str:
     return json.dumps(state, indent=2)
 
 
+def widget_key(state: dict, name: str, idx: int | None = None) -> str:
+    suffix = f"_{idx}" if idx is not None else ""
+    return f"{state['id']}_{name}{suffix}"
+
+
 if "experiment" not in st.session_state:
     st.session_state.experiment = fresh_state()
 
@@ -333,29 +338,37 @@ st.subheader("2. Run three rounds")
 for idx in range(3):
     with st.expander(f"Round {idx + 1}", expanded=idx == 0):
         left, right = st.columns(2)
+        cgf_key = widget_key(state, "cgf", idx)
+        fgf_key = widget_key(state, "fgf", idx)
+        st.session_state.setdefault(cgf_key, state["rounds"][idx]["cgf"])
+        st.session_state.setdefault(fgf_key, state["rounds"][idx]["fgf"])
         with left:
             st.markdown("**CGF**")
             if st.button(f"Run CGF round {idx + 1}", key=f"run_cgf_{idx}", disabled=not api_key):
                 with st.spinner("Running CGF..."):
-                    state["rounds"][idx]["cgf"] = call_openai(api_key, state["model"], CGF_PROMPT, cgf_round_prompt(state, idx))
+                    cgf_text = call_openai(api_key, state["model"], CGF_PROMPT, cgf_round_prompt(state, idx))
+                    state["rounds"][idx]["cgf"] = cgf_text
+                    st.session_state[cgf_key] = cgf_text
                     st.rerun()
             state["rounds"][idx]["cgf"] = st.text_area(
                 f"CGF response {idx + 1}",
                 state["rounds"][idx]["cgf"],
                 height=260,
-                key=f"cgf_{idx}",
+                key=cgf_key,
             )
         with right:
             st.markdown("**FGF**")
             if st.button(f"Run FGF round {idx + 1}", key=f"run_fgf_{idx}", disabled=not api_key or not state["rounds"][idx]["cgf"]):
                 with st.spinner("Running FGF..."):
-                    state["rounds"][idx]["fgf"] = call_openai(api_key, state["model"], FGF_PROMPT, fgf_round_prompt(state, idx))
+                    fgf_text = call_openai(api_key, state["model"], FGF_PROMPT, fgf_round_prompt(state, idx))
+                    state["rounds"][idx]["fgf"] = fgf_text
+                    st.session_state[fgf_key] = fgf_text
                     st.rerun()
             state["rounds"][idx]["fgf"] = st.text_area(
                 f"FGF critique {idx + 1}",
                 state["rounds"][idx]["fgf"],
                 height=260,
-                key=f"fgf_{idx}",
+                key=fgf_key,
             )
 
 st.subheader("3. Report")
@@ -364,14 +377,17 @@ with report_col:
     if st.button("Generate review-ready report", type="primary", disabled=not any(item["cgf"] for item in state["rounds"])):
         if api_key:
             with st.spinner("Generating report..."):
-                state["report"] = call_openai(
+                report_text = call_openai(
                     api_key,
                     state["model"],
                     "You are a concise experiment analyst. Produce review-ready CGF-FGF evaluation reports from transcripts.",
                     report_prompt(state),
                 )
+                state["report"] = report_text
+                st.session_state[widget_key(state, "report")] = report_text
         else:
             state["report"] = local_report(state)
+            st.session_state[widget_key(state, "report")] = state["report"]
         st.rerun()
 with export_col:
     st.download_button(
@@ -382,4 +398,6 @@ with export_col:
         use_container_width=True,
     )
 
-state["report"] = st.text_area("Review-ready report", state["report"] or local_report(state), height=420)
+report_key = widget_key(state, "report")
+st.session_state.setdefault(report_key, state["report"] or local_report(state))
+state["report"] = st.text_area("Review-ready report", height=420, key=report_key)
